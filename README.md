@@ -68,8 +68,8 @@ cd agent && mkdir build && cd build && cmake .. && make
 | Person | Role | Share |
 |---|---|---|
 | Abhimanyu Chettiar | Capture Agent & Integration Lead | 60% |
-| _(teammate)_ | ML / Data Lead | 20% |
-| _(teammate)_ | DB & Dashboard Lead | 20% |
+| Zaara Khan | ML / Data Lead | 20% |
+| Bhupender | DB & Dashboard Lead | 20% |
 
 ## Branching
 
