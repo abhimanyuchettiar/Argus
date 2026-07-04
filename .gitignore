@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# C++ build artifacts
+agent/build/
+*.o
+*.out
+
+# Datasets — too large / not meant for git
+data/*.csv
+data/*.zip
+!data/.gitkeep
+
+# Trained models — regenerate, don't commit
+*.joblib
+*.pkl
+
+# Env / secrets
+.env
+
+# Editor/OS junk
+.vscode/
+.idea/
+.DS_Store

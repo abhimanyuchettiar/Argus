@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Argus — Live Threat Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0b0f14; color: #e5e9ee; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; font-weight: 600; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+    .card { background: #131a22; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 13px; text-transform: uppercase; color: #8a96a3; margin: 0 0 8px; }
+    canvas { max-height: 240px; }
+  </style>
+</head>
+<body>
+  <h1>Argus — Live Network Threat Dashboard</h1>
+  <div class="grid">
+    <div class="card">
+      <h2>Packets / sec</h2>
+      <canvas id="packetsChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>Threat Timeline</h2>
+      <canvas id="threatsChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>Top Attacker IPs</h2>
+      <canvas id="topIpsChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // TODO(week 7): fetch from the FastAPI endpoints below and feed real data into Chart.js.
+    // const API_BASE = "http://localhost:8000";
+    // setInterval fetching /stats, /flows, /threats every second — or swap for a WebSocket.
+
+    const packetsChart = new Chart(document.getElementById('packetsChart'), {
+      type: 'line',
+      data: { labels: [], datasets: [{ label: 'packets/sec', data: [], borderColor: '#4ade80' }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    const threatsChart = new Chart(document.getElementById('threatsChart'), {
+      type: 'bar',
+      data: { labels: [], datasets: [{ label: 'threats', data: [], backgroundColor: '#f87171' }] },
+      options: { responsive: true }
+    });
+
+    const topIpsChart = new Chart(document.getElementById('topIpsChart'), {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: ['#60a5fa', '#f87171', '#fbbf24', '#a78bfa', '#4ade80'] }] },
+      options: { responsive: true }
+    });
+  </script>
+</body>
+</html>
