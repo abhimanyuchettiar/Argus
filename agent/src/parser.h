@@ -1,40 +1,31 @@
 #pragma once
 #include <cstdint>
-#include <string>
+#include <cstddef>
+#include <optional>
 
-// Uniquely identifies a flow. See docs/FLOW_SCHEMA.md for the JSON this maps to.
-struct FlowKey {
-    std::string src_ip;
-    std::string dst_ip;
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint8_t protocol; // 0=TCP, 1=UDP, 2=ICMP
+// Result of parsing one raw packet off the wire.
+struct ParsedPacket {
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;  // 0 if not TCP/UDP
+    uint16_t dst_port;  // 0 if not TCP/UDP
+    uint8_t  protocol;  // 0=TCP, 1=UDP, 2=ICMP
+    uint32_t total_len; // wire length of the packet
+    uint32_t payload_len;
+    const uint8_t* payload; // pointer into original buffer, not owned
 
-    bool operator==(const FlowKey& other) const;
-};
-
-// Hash support so FlowKey can be used in std::unordered_map (see flow.h)
-struct FlowKeyHash {
-    std::size_t operator()(const FlowKey& key) const;
-};
-
-// Raw per-packet info extracted by walking the header chain.
-struct PacketInfo {
-    std::string src_ip;
-    std::string dst_ip;
-    uint16_t src_port = 0;
-    uint16_t dst_port = 0;
-    uint8_t protocol = 0;
-    uint32_t packet_size = 0;
     bool syn = false;
     bool fin = false;
-    bool psh = false;
     bool ack = false;
+    bool psh = false;
     bool rst = false;
-    double timestamp = 0.0; // seconds since epoch, from pcap header
 };
 
-// TODO(week 2): Implement in parser.cpp
-// Walks Ethernet -> IP -> TCP/UDP headers by byte offset and fills PacketInfo.
-// See blueprint section 3.1 for the exact header layout to expect.
-PacketInfo parse_packet(const unsigned char* packet_data, uint32_t length, double timestamp);
+// Parses an Ethernet frame captured by libpcap and walks the
+// Ethernet -> IP -> TCP/UDP/ICMP chain manually via byte offsets.
+// Returns std::nullopt for anything we don't care about (ARP, IPv6, etc).
+std::optional<ParsedPacket> parse_packet(const uint8_t* data, uint32_t caplen);
+
+// Shannon entropy (bits/byte, 0-8) of a payload buffer. Used as a
+// per-packet signal that gets rolled into the flow's running average.
+double payload_entropy(const uint8_t* data, uint32_t len);
