@@ -7,3 +7,4 @@ numpy
 joblib
 psycopg2-binary
 websockets
+pytest
