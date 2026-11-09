@@ -32,6 +32,7 @@ struct PacketInfo {
     bool ack = false;
     bool rst = false;
     double timestamp = 0.0; // seconds since epoch, from pcap header
+    bool valid = false;
 };
 
 // TODO(week 2): Implement in parser.cpp

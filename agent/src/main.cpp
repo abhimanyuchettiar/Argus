@@ -1,65 +1,72 @@
-// Argus Capture Agent
-// Entry point — opens the libpcap capture handle, starts the capture and
-// sender threads, and handles clean shutdown on SIGINT/SIGTERM.
-//
-// Week 1 goal: get this printing a live packet count.
-// Week 2 goal: wire in parser.cpp + flow.cpp for per-flow feature JSON.
-// Week 3 goal: wire in sender.cpp to stream to the Mac.
-
-#include <atomic>
-#include <csignal>
-#include <cstdio>
+// Argus IPv4 packet capture, per-flow aggregation, and TCP flow sender.
 #include <pcap.h>
-#include "parser.h"
 #include "flow.h"
+#include "parser.h"
 #include "sender.h"
 
-static std::atomic<bool> running{true};
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <thread>
+#include <unordered_map>
 
-void handle_signal(int signum) {
-    (void)signum;
-    running = false;
-}
+static std::atomic<bool> running{true};
+static void handle_signal(int) { running = false; }
 
 int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::fprintf(stderr, "Usage: %s <interface> [listener-host] [listener-port]\n", argv[0]);
+        return 2;
+    }
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
+    const char* interface = argv[1];
+    const char* listener_host = argc > 2 ? argv[2] : "127.0.0.1";
+    const int listener_port = argc > 3 ? std::atoi(argv[3]) : 9999;
 
-    char errbuf[PCAP_ERRBUF_SIZE];
-
-    // TODO(week 1): pick device — for now, use argv[1] or list devices with pcap_findalldevs.
-    const char* device = (argc > 1) ? argv[1] : nullptr;
-    if (!device) {
-        std::fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
-        return 1;
-    }
-
-    pcap_t* handle = pcap_open_live(device, BUFSIZ, 1, 1000, errbuf);
-    if (!handle) {
+    char errbuf[PCAP_ERRBUF_SIZE]{};
+    pcap_t* capture = pcap_open_live(interface, BUFSIZ, 1, 500, errbuf);
+    if (!capture) {
         std::fprintf(stderr, "pcap_open_live failed: %s\n", errbuf);
         return 1;
     }
+    Sender sender(listener_host, listener_port);
+    FlowTable flows;
+    auto last_flush = std::chrono::steady_clock::now();
+    std::fprintf(stdout, "[agent] capturing on %s, sending to %s:%d\n", interface, listener_host, listener_port);
 
-    std::printf("[agent] capturing on %s — Ctrl+C to stop\n", device);
-
-    // TODO(week 1): replace this with a proper capture loop (pcap_loop or pcap_next_ex
-    // in a dedicated thread), feeding packets into parse_packet() -> FlowTable -> sender.
-    uint64_t packet_count = 0;
     while (running) {
-        struct pcap_pkthdr* header;
-        const u_char* packet;
-        int rc = pcap_next_ex(handle, &header, &packet);
-        if (rc == 1) {
-            packet_count++;
-            if (packet_count % 100 == 0) {
-                std::printf("[agent] packets captured: %llu\n",
-                            static_cast<unsigned long long>(packet_count));
+        pcap_pkthdr* header = nullptr;
+        const u_char* packet = nullptr;
+        const int rc = pcap_next_ex(capture, &header, &packet);
+        if (rc == 1 && header && packet) {
+            const double timestamp = static_cast<double>(header->ts.tv_sec) + header->ts.tv_usec / 1e6;
+            const PacketInfo info = parse_packet(packet, header->caplen, timestamp);
+            if (info.valid) {
+                FlowKey key{info.src_ip, info.dst_ip, info.src_port, info.dst_port, info.protocol};
+                flows[key].update(info);
             }
+        } else if (rc == -1) {
+            std::fprintf(stderr, "pcap capture failed: %s\n", pcap_geterr(capture));
+            break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_flush >= std::chrono::seconds(1)) {
+            for (const auto& entry : flows) {
+                const auto& key = entry.first;
+                const auto& stats = entry.second;
+                const auto features = compute_features(stats, key.dst_port, key.protocol);
+                if (!sender.send_flow(key, features, stats.last_seen)) {
+                    std::fprintf(stderr, "[agent] unable to send flow to listener\n");
+                }
+            }
+            flows.clear();
+            last_flush = now;
         }
     }
-
-    std::printf("[agent] shutting down, %llu packets captured total\n",
-                static_cast<unsigned long long>(packet_count));
-    pcap_close(handle);
+    sender.close();
+    pcap_close(capture);
     return 0;
 }

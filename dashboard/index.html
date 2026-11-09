@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Argus — Live Threat Dashboard</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; background: #0b0f14; color: #e5e9ee; margin: 0; padding: 24px; }
     h1 { font-size: 20px; font-weight: 600; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+    #status { color: #8a96a3; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 16px; }
     .card { background: #131a22; border-radius: 8px; padding: 16px; }
     .card h2 { font-size: 13px; text-transform: uppercase; color: #8a96a3; margin: 0 0 8px; }
     canvas { max-height: 240px; }
@@ -15,43 +17,60 @@
 </head>
 <body>
   <h1>Argus — Live Network Threat Dashboard</h1>
+  <p id="status">Connecting to API…</p>
   <div class="grid">
-    <div class="card">
-      <h2>Packets / sec</h2>
-      <canvas id="packetsChart"></canvas>
-    </div>
-    <div class="card">
-      <h2>Threat Timeline</h2>
-      <canvas id="threatsChart"></canvas>
-    </div>
-    <div class="card">
-      <h2>Top Attacker IPs</h2>
-      <canvas id="topIpsChart"></canvas>
-    </div>
+    <div class="card"><h2>Packets / sec</h2><canvas id="packetsChart"></canvas></div>
+    <div class="card"><h2>Threat Timeline</h2><canvas id="threatsChart"></canvas></div>
+    <div class="card"><h2>Top Attacker IPs</h2><canvas id="topIpsChart"></canvas></div>
   </div>
-
   <script>
-    // TODO(week 7): fetch from the FastAPI endpoints below and feed real data into Chart.js.
-    // const API_BASE = "http://localhost:8000";
-    // setInterval fetching /stats, /flows, /threats every second — or swap for a WebSocket.
-
+    const API_BASE = window.location.origin;
     const packetsChart = new Chart(document.getElementById('packetsChart'), {
-      type: 'line',
-      data: { labels: [], datasets: [{ label: 'packets/sec', data: [], borderColor: '#4ade80' }] },
+      type: 'line', data: { labels: [], datasets: [{ label: 'packets/sec', data: [], borderColor: '#4ade80' }] },
       options: { responsive: true, scales: { y: { beginAtZero: true } } }
     });
-
     const threatsChart = new Chart(document.getElementById('threatsChart'), {
-      type: 'bar',
-      data: { labels: [], datasets: [{ label: 'threats', data: [], backgroundColor: '#f87171' }] },
+      type: 'bar', data: { labels: [], datasets: [{ label: 'threats', data: [], backgroundColor: '#f87171' }] },
+      options: { responsive: true }
+    });
+    const topIpsChart = new Chart(document.getElementById('topIpsChart'), {
+      type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#60a5fa', '#f87171', '#fbbf24', '#a78bfa', '#4ade80'] }] },
       options: { responsive: true }
     });
 
-    const topIpsChart = new Chart(document.getElementById('topIpsChart'), {
-      type: 'doughnut',
-      data: { labels: [], datasets: [{ data: [], backgroundColor: ['#60a5fa', '#f87171', '#fbbf24', '#a78bfa', '#4ade80'] }] },
-      options: { responsive: true }
-    });
+    async function refreshDashboard() {
+      try {
+        const [stats, flows, threats] = await Promise.all([
+          fetch(`${API_BASE}/stats`).then(r => { if (!r.ok) throw new Error(`stats: ${r.status}`); return r.json(); }),
+          fetch(`${API_BASE}/flows?minutes=5&limit=100`).then(r => { if (!r.ok) throw new Error(`flows: ${r.status}`); return r.json(); }),
+          fetch(`${API_BASE}/threats?minutes=60&limit=100`).then(r => { if (!r.ok) throw new Error(`threats: ${r.status}`); return r.json(); })
+        ]);
+        document.getElementById('status').textContent = `API connected · ${flows.flows.length} flows · ${stats.active_threats} recent threats · updated ${new Date().toLocaleTimeString()}`;
+        packetsChart.data.labels.push(new Date().toLocaleTimeString());
+        packetsChart.data.datasets[0].data.push(stats.packets_per_second);
+        if (packetsChart.data.labels.length > 30) { packetsChart.data.labels.shift(); packetsChart.data.datasets[0].data.shift(); }
+        packetsChart.update();
+        const counts = {};
+        for (const threat of threats.threats) {
+          const time = new Date(threat.timestamp).toLocaleTimeString();
+          counts[time] = (counts[time] || 0) + 1;
+        }
+        threatsChart.data.labels = Object.keys(counts).slice(-20);
+        threatsChart.data.datasets[0].data = Object.values(counts).slice(-20);
+        threatsChart.update();
+        const ips = {};
+        for (const flow of flows.flows) ips[flow.src_ip] = (ips[flow.src_ip] || 0) + 1;
+        const top = Object.entries(ips).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        topIpsChart.data.labels = top.map(([ip]) => ip);
+        topIpsChart.data.datasets[0].data = top.map(([, count]) => count);
+        topIpsChart.update();
+      } catch (error) {
+        document.getElementById('status').textContent = `API error: ${error.message}`;
+        console.error('Dashboard refresh failed:', error);
+      }
+    }
+    refreshDashboard();
+    setInterval(refreshDashboard, 2000);
   </script>
 </body>
 </html>

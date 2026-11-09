@@ -1,0 +1,14 @@
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libpcap-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent/ ./
+RUN cmake -S . -B /build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /build --parallel
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libpcap0.8 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /build/argus_agent /usr/local/bin/argus_agent
+ENTRYPOINT ["argus_agent"]

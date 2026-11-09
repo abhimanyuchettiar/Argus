@@ -1,0 +1,76 @@
+services:
+  db:
+    image: timescale/timescaledb-ha:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ARGUS_DB_NAME:-argus}
+      POSTGRES_USER: ${ARGUS_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${ARGUS_DB_PASSWORD:?Set ARGUS_DB_PASSWORD in .env}
+    ports:
+      - "${ARGUS_DB_BIND_ADDRESS:-127.0.0.1}:5432:5432"
+    volumes:
+      - argus-db-data:/home/postgres/pgdata/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-argus-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ARGUS_DB_HOST: db
+      ARGUS_DB_PORT: 5432
+      ARGUS_DB_NAME: ${ARGUS_DB_NAME:-argus}
+      ARGUS_DB_USER: ${ARGUS_DB_USER:-postgres}
+      ARGUS_DB_PASSWORD: ${ARGUS_DB_PASSWORD:?Set ARGUS_DB_PASSWORD in .env}
+      ARGUS_CORS_ORIGINS: ${ARGUS_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
+    ports:
+      - "${ARGUS_API_BIND_ADDRESS:-127.0.0.1}:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  listener:
+    command: ["python", "-m", "ml.listener"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ARGUS_LISTENER_HOST: 0.0.0.0
+      ARGUS_LISTENER_PORT: 9999
+      ARGUS_DB_HOST: db
+      ARGUS_DB_PORT: 5432
+      ARGUS_DB_NAME: ${ARGUS_DB_NAME:-argus}
+      ARGUS_DB_USER: ${ARGUS_DB_USER:-postgres}
+      ARGUS_DB_PASSWORD: ${ARGUS_DB_PASSWORD:?Set ARGUS_DB_PASSWORD in .env}
+      ARGUS_MODEL_PATH: /app/ml/model.joblib
+    ports:
+      - "${ARGUS_LISTENER_BIND_ADDRESS:-127.0.0.1}:9999:9999"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  demo-sender:
+    command: ["python", "-m", "ml.demo_sender"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["demo"]
+    restart: unless-stopped
+    environment:
+      ARGUS_LISTENER_HOST: listener
+      ARGUS_LISTENER_PORT: 9999
+      ARGUS_DEMO_INTERVAL: ${ARGUS_DEMO_INTERVAL:-2}
+    depends_on:
+      listener:
+        condition: service_started
+
+volumes:
+  argus-db-data:
