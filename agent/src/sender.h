@@ -1,25 +1,36 @@
 #pragma once
 #include <string>
-#include "flow.h"
+#include <chrono>
+#include "types.h"
 
-// Handles the TCP connection from the VM agent to the Mac listener.
-// TODO(week 3): Implement connect / reconnect-on-drop / send loop.
+// Sends flow feature JSON over a TCP socket to the Mac-side Python
+// listener (ml/listener.py). If the Mac drops, the agent keeps
+// capturing/aggregating in the background - send() just returns false
+// and connect_if_needed() retries with backoff on the next call.
 class Sender {
 public:
-    Sender(const std::string& host, int port);
+    Sender(std::string host, uint16_t port);
+    ~Sender();
 
-    // Returns false if the connection is down; caller should keep capturing
-    // and retry rather than crash (see blueprint 3.1 "Signal handling").
-    bool connect();
+    // Attempts to (re)connect if not currently connected. Cheap no-op
+    // if already connected or if a backoff window hasn't elapsed yet.
+    bool connect_if_needed();
 
-    // Serializes a FlowKey + FlowFeatures pair into the JSON contract
-    // defined in docs/FLOW_SCHEMA.md and sends it over the socket.
-    bool send_flow(const FlowKey& key, const FlowFeatures& features, double timestamp);
+    // Serializes key+features as one JSON line and sends it.
+    // Returns false (and drops the connection) on any socket error.
+    bool send_flow(const FlowKey& key, const FlowFeatures& features);
 
-    void close();
+    bool is_connected() const { return sockfd_ >= 0; }
 
 private:
     std::string host_;
-    int port_;
-    int socket_fd_ = -1;
+    uint16_t port_;
+    int sockfd_ = -1;
+
+    std::chrono::steady_clock::time_point last_attempt_{};
+    std::chrono::milliseconds backoff_{500};
+    static constexpr std::chrono::milliseconds kMaxBackoff{10000};
+
+    void close_socket();
+    static std::string ip_to_string(uint32_t ip_be_order);
 };

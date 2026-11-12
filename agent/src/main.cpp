@@ -1,65 +1,113 @@
-// Argus Capture Agent
-// Entry point — opens the libpcap capture handle, starts the capture and
-// sender threads, and handles clean shutdown on SIGINT/SIGTERM.
-//
-// Week 1 goal: get this printing a live packet count.
-// Week 2 goal: wire in parser.cpp + flow.cpp for per-flow feature JSON.
-// Week 3 goal: wire in sender.cpp to stream to the Mac.
-
-#include <atomic>
-#include <csignal>
-#include <cstdio>
 #include <pcap.h>
+#include <csignal>
+#include <atomic>
+#include <thread>
+#include <chrono>
+#include <iostream>
+#include <cstring>
+
+#include "types.h"
 #include "parser.h"
 #include "flow.h"
 #include "sender.h"
 
-static std::atomic<bool> running{true};
+namespace {
 
-void handle_signal(int signum) {
-    (void)signum;
-    running = false;
+std::atomic<bool> g_running{true};
+
+void handle_signal(int) {
+    g_running.store(false);
 }
 
+// Bundles what the pcap callback needs without using global state
+// (aside from g_running).
+struct CaptureContext {
+    FlowTable* flow_table;
+    std::atomic<uint64_t> packet_count{0};
+};
+
+void packet_handler(u_char* user, const struct pcap_pkthdr* header,
+                     const u_char* bytes) {
+    auto* ctx = reinterpret_cast<CaptureContext*>(user);
+    ctx->packet_count.fetch_add(1, std::memory_order_relaxed);
+
+    auto parsed = parse_packet(bytes, header->caplen);
+    if (parsed.has_value()) {
+        // Wire length in FlowStats should reflect the packet on the wire,
+        // not just the parsed payload - use header->len (pre-truncation).
+        parsed->total_len = header->len;
+        ctx->flow_table->process_packet(*parsed);
+    }
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
+    std::string iface = argc > 1 ? argv[1] : "eth0";
+    std::string mac_host = argc > 2 ? argv[2] : "127.0.0.1";
+    uint16_t mac_port = argc > 3 ? static_cast<uint16_t>(std::stoi(argv[3])) : 9999;
+
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
     char errbuf[PCAP_ERRBUF_SIZE];
-
-    // TODO(week 1): pick device — for now, use argv[1] or list devices with pcap_findalldevs.
-    const char* device = (argc > 1) ? argv[1] : nullptr;
-    if (!device) {
-        std::fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
+    pcap_t* handle = pcap_open_live(iface.c_str(), /*snaplen=*/65535,
+                                     /*promisc=*/1, /*to_ms=*/1000, errbuf);
+    if (handle == nullptr) {
+        std::cerr << "[agent] pcap_open_live failed on " << iface
+                   << ": " << errbuf << "\n";
         return 1;
     }
 
-    pcap_t* handle = pcap_open_live(device, BUFSIZ, 1, 1000, errbuf);
-    if (!handle) {
-        std::fprintf(stderr, "pcap_open_live failed: %s\n", errbuf);
-        return 1;
+    // Optional but recommended: only capture IPv4 to cut noise early.
+    struct bpf_program filter{};
+    if (pcap_compile(handle, &filter, "ip", 1, PCAP_NETMASK_UNKNOWN) == 0) {
+        pcap_setfilter(handle, &filter);
+        pcap_freecode(&filter);
     }
 
-    std::printf("[agent] capturing on %s — Ctrl+C to stop\n", device);
+    FlowTable flow_table;
+    CaptureContext ctx{&flow_table};
+    Sender sender(mac_host, mac_port);
 
-    // TODO(week 1): replace this with a proper capture loop (pcap_loop or pcap_next_ex
-    // in a dedicated thread), feeding packets into parse_packet() -> FlowTable -> sender.
-    uint64_t packet_count = 0;
-    while (running) {
-        struct pcap_pkthdr* header;
-        const u_char* packet;
-        int rc = pcap_next_ex(handle, &header, &packet);
-        if (rc == 1) {
-            packet_count++;
-            if (packet_count % 100 == 0) {
-                std::printf("[agent] packets captured: %llu\n",
-                            static_cast<unsigned long long>(packet_count));
+    std::cerr << "[agent] capturing on " << iface << ", streaming to "
+               << mac_host << ":" << mac_port << "\n";
+
+    // Capture thread: pcap_dispatch in short bursts so we can check
+    // g_running and exit promptly on SIGINT/SIGTERM.
+    std::thread capture_thread([&]() {
+        while (g_running.load()) {
+            int result = pcap_dispatch(handle, /*cnt=*/100, packet_handler,
+                                        reinterpret_cast<u_char*>(&ctx));
+            if (result < 0) break; // error or pcap_breakloop called
+        }
+    });
+
+    // Aggregator/sender thread: once a second, flush the flow table and
+    // stream each flow's features out. This thread owns all socket I/O
+    // so a slow/dead Mac connection never blocks packet capture.
+    std::thread sender_thread([&]() {
+        while (g_running.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            auto flows = flow_table.flush();
+            for (const auto& [key, features] : flows) {
+                sender.send_flow(key, features);
             }
         }
-    }
+        // Final flush on shutdown so in-progress flows aren't lost.
+        auto remaining = flow_table.flush();
+        for (const auto& [key, features] : remaining) {
+            sender.send_flow(key, features);
+        }
+    });
 
-    std::printf("[agent] shutting down, %llu packets captured total\n",
-                static_cast<unsigned long long>(packet_count));
+    capture_thread.join();
+    pcap_breakloop(handle);
+    sender_thread.join();
+
     pcap_close(handle);
+    std::cerr << "[agent] shut down cleanly. total packets captured: "
+               << ctx.packet_count.load() << "\n";
     return 0;
 }
