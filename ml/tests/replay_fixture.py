@@ -14,6 +14,7 @@ Usage (run AFTER starting ml/listener.py in another terminal):
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
 import os
 import socket
@@ -58,7 +59,7 @@ def build_flow_json(row: dict, idx: int) -> str:
 
     flow = {
         "flow_id":   f"SYNTHETIC-{idx:04d}-{label}",
-        "timestamp": "2026-01-01T00:00:00.000Z",
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "src_ip":    "192.0.2.1",   # TEST-NET — RFC 5737
         "dst_ip":    "192.0.2.2",
         "src_port":  10000 + idx,

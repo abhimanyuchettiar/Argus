@@ -2,11 +2,11 @@
 #include <cmath>
 #include <algorithm>
 
-using clock_t = std::chrono::steady_clock;
+using SteadyClock = std::chrono::steady_clock;
 
 void FlowTable::process_packet(const ParsedPacket& pkt) {
     FlowKey key{pkt.src_ip, pkt.dst_ip, pkt.src_port, pkt.dst_port, pkt.protocol};
-    auto now = clock_t::now();
+    auto now = SteadyClock::now();
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto& stats = flows_[key]; // default-constructs on first packet
